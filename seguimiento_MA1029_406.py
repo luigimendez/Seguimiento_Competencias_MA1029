@@ -1,17 +1,11 @@
-# =====================================================
-# DASHBOARD DE SEGUIMIENTO DE COMPETENCIAS
-# VERSIÓN FINAL – STREAMLIT CLOUD SAFE
-# =====================================================
-
 import streamlit as st
 import pandas as pd
 import os
 
-# =====================================================
+# =============================
 # CONFIGURACIÓN GENERAL
-# =====================================================
-DATA_EST = "estudiantes.csv"
-DATA_ACT = "actividades.csv"
+# =============================
+DATA_FILE = "datos_competencias.csv"
 
 COMPETENCIAS = ["SING0101", "SING0301", "SEG0603"]
 ELEMENTOS = 5
@@ -19,41 +13,64 @@ NIVELES = ["No aplica", "Incipiente", "Básico", "Sólido", "Destacado"]
 VALORES = {"Incipiente": 0, "Básico": 1, "Sólido": 2, "Destacado": 3}
 ACTIVIDADES = [f"A{i+1}" for i in range(8)]
 
-# =====================================================
-# FUNCIONES
-# =====================================================
-def cargar_csv(path, columnas):
-    if os.path.exists(path):
-        return pd.read_csv(path)
-    return pd.DataFrame(columns=columnas)
+st.set_page_config(page_title="Seguimiento de Competencias", layout="wide")
 
-def guardar_csv(df, path):
-    df.to_csv(path, index=False)
+# =============================
+# FUNCIONES DE DATOS
+# =============================
+def cargar_datos():
+    if os.path.exists(DATA_FILE):
+        return pd.read_csv(DATA_FILE)
+    else:
+        columnas = ["Grupo", "Estudiante", "Actividad"]
+        for c in COMPETENCIAS:
+            for e in range(1, ELEMENTOS + 1):
+                columnas.append(f"{c}_E{e}")
+        return pd.DataFrame(columns=columnas)
 
-# =====================================================
+def guardar_datos(df):
+    df.to_csv(DATA_FILE, index=False)
+
+def calcular_porcentaje(df_est, competencia):
+    puntos = 0
+    max_puntos = 0
+    for _, row in df_est.iterrows():
+        for e in range(1, ELEMENTOS + 1):
+            val = row[f"{competencia}_E{e}"]
+            if pd.notna(val) and val != "No aplica":
+                puntos += VALORES[val]
+                max_puntos += max(VALORES.values())
+    if max_puntos == 0:
+        return 0
+    return round((puntos / max_puntos) * 100, 2)
+
+def semaforo(p):
+    if p >= 75:
+        return "🟢 Destacado"
+    elif p >= 50:
+        return "🟡 Sólido"
+    elif p >= 25:
+        return "🟠 Básico"
+    return "🔴 Incipiente"
+
+# =============================
 # CARGA DE DATOS
-# =====================================================
-df_est = cargar_csv(DATA_EST, ["Estudiante", "Grupo"])
+# =============================
+df = cargar_datos()
 
-columnas_act = ["Estudiante", "Grupo", "Actividad"] + [
-    f"{c}_E{e}" for c in COMPETENCIAS for e in range(1, ELEMENTOS + 1)
-]
-df_act = cargar_csv(DATA_ACT, columnas_act)
-
-# =====================================================
-# INTERFAZ
-# =====================================================
-st.title("📊 Seguimiento de Competencias")
-
-menu = st.sidebar.radio(
-    "Menú",
+# =============================
+# MENÚ PRINCIPAL
+# =============================
+st.sidebar.title("Menú")
+seccion = st.sidebar.radio(
+    "Selecciona una sección",
     ["Registrar Estudiante", "Captura Actividad", "Seguimiento de Logro", "Cierre de Semestre"]
 )
 
-# =====================================================
-# REGISTRAR ESTUDIANTE
-# =====================================================
-if menu == "Registrar Estudiante":
+# ======================================================
+# 1. REGISTRAR ESTUDIANTE
+# ======================================================
+if seccion == "Registrar Estudiante":
     st.header("Registrar Estudiante")
 
     grupo = st.text_input("Grupo")
@@ -61,109 +78,152 @@ if menu == "Registrar Estudiante":
 
     if st.button("Registrar"):
         if grupo and estudiante:
-            df_est = pd.concat(
-                [df_est, pd.DataFrame([[estudiante, grupo]], columns=df_est.columns)],
-                ignore_index=True
-            )
-            guardar_csv(df_est, DATA_EST)
-            st.success("Estudiante registrado")
+            nueva = {
+                "Grupo": grupo,
+                "Estudiante": estudiante,
+                "Actividad": ""
+            }
+            for c in COMPETENCIAS:
+                for e in range(1, ELEMENTOS + 1):
+                    nueva[f"{c}_E{e}"] = "No aplica"
+
+            df = pd.concat([df, pd.DataFrame([nueva])], ignore_index=True)
+            guardar_datos(df)
+            st.success("Estudiante registrado correctamente")
         else:
-            st.warning("Completa todos los campos")
+            st.warning("Completa grupo y nombre")
 
-    if not df_est.empty:
-        grupo_sel = st.selectbox("Grupo", sorted(df_est["Grupo"].unique()))
-        st.dataframe(df_est[df_est["Grupo"] == grupo_sel])
+    st.subheader("Estudiantes registrados")
+    if not df.empty:
+        grupos = sorted(df["Grupo"].dropna().unique())
+        grupo_sel = st.selectbox("Selecciona grupo", grupos)
 
-# =====================================================
-# CAPTURA DE ACTIVIDAD
-# =====================================================
-elif menu == "Captura Actividad":
+        tabla = df[df["Grupo"] == grupo_sel][["Grupo", "Estudiante"]].drop_duplicates()
+        st.dataframe(tabla, use_container_width=True)
+
+# ======================================================
+# 2. CAPTURA ACTIVIDAD
+# ======================================================
+elif seccion == "Captura Actividad":
     st.header("Captura de Actividad")
 
-    if df_est.empty:
+    if df.empty:
         st.warning("Primero registra estudiantes")
     else:
-        grupo = st.selectbox("Grupo", sorted(df_est["Grupo"].unique()))
-        estudiantes = df_est[df_est["Grupo"] == grupo]["Estudiante"].tolist()
-        estudiante = st.selectbox("Estudiante", estudiantes)
-        actividad = st.selectbox("Actividad", ACTIVIDADES)
+        grupos = sorted(df["Grupo"].dropna().unique())
+        grupo_sel = st.selectbox("Grupo", grupos)
 
-        registro = {"Estudiante": estudiante, "Grupo": grupo, "Actividad": actividad}
+        estudiantes = sorted(
+            df[df["Grupo"] == grupo_sel]["Estudiante"].dropna().unique()
+        )
+        est_sel = st.selectbox("Estudiante", estudiantes)
+        act_sel = st.selectbox("Actividad", ACTIVIDADES)
+
+        datos = {"Grupo": grupo_sel, "Estudiante": est_sel, "Actividad": act_sel}
 
         for c in COMPETENCIAS:
-            st.subheader(c)
+            st.subheader(f"Competencia {c}")
             for e in range(1, ELEMENTOS + 1):
-                registro[f"{c}_E{e}"] = st.selectbox(
-                    f"Elemento {e}", NIVELES, key=f"{c}{e}"
+                datos[f"{c}_E{e}"] = st.selectbox(
+                    f"Elemento {e}",
+                    NIVELES,
+                    key=f"{c}_{e}_{act_sel}"
                 )
 
         if st.button("Guardar actividad"):
-            df_act = pd.concat([df_act, pd.DataFrame([registro])], ignore_index=True)
-            guardar_csv(df_act, DATA_ACT)
+            existe = (
+                (df["Grupo"] == grupo_sel) &
+                (df["Estudiante"] == est_sel) &
+                (df["Actividad"] == act_sel)
+            )
+
+            if existe.any():
+                df.loc[existe, :] = pd.DataFrame([datos])
+            else:
+                df = pd.concat([df, pd.DataFrame([datos])], ignore_index=True)
+
+            guardar_datos(df)
             st.success("Actividad guardada")
 
-# =====================================================
-# SEGUIMIENTO DE LOGRO (🔥 ZONA CORREGIDA)
-# =====================================================
-elif menu == "Seguimiento de Logro":
+# ======================================================
+# 3. SEGUIMIENTO DE LOGRO
+# ======================================================
+elif seccion == "Seguimiento de Logro":
     st.header("Seguimiento de Logro")
 
-    if df_act.empty:
-        st.info("No hay actividades registradas")
+    if df.empty:
+        st.warning("Primero registra estudiantes")
     else:
-        grupo = st.selectbox("Grupo", sorted(df_est["Grupo"].unique()))
-        estudiantes = df_est[df_est["Grupo"] == grupo]["Estudiante"].tolist()
-        estudiante = st.selectbox("Estudiante", ["Todos"] + estudiantes)
+        grupos = sorted(df["Grupo"].dropna().unique())
+        grupo_sel = st.selectbox("Grupo", grupos)
 
-        df_f = df_act[df_act["Grupo"] == grupo]
-        if estudiante != "Todos":
-            df_f = df_f[df_f["Estudiante"] == estudiante]
+        df_g = df[df["Grupo"] == grupo_sel]
 
-        st.subheader("Tabla completa")
-        st.dataframe(df_f)
+        estudiantes = ["Todos"] + sorted(df_g["Estudiante"].dropna().unique())
+        est_sel = st.selectbox("Estudiante", estudiantes)
 
-        # 🔥 DESCARGA SEGURA EN CSV
+        if est_sel != "Todos":
+            df_f = df_g[df_g["Estudiante"] == est_sel]
+        else:
+            df_f = df_g
+
+        st.subheader("Tabla completa de evidencias")
+        st.dataframe(df_f, use_container_width=True)
+
+        st.subheader("Resultados por competencia")
+        resultados = {}
+        for c in COMPETENCIAS:
+            resultados[c] = calcular_porcentaje(df_f, c)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.bar_chart(pd.DataFrame.from_dict(
+                resultados, orient="index", columns=["Porcentaje"]
+            ))
+        with col2:
+            for c, p in resultados.items():
+                st.write(f"{c}: {p}% {semaforo(p)}")
+
+        # EXPORTACIÓN SEGURA (CSV)
         csv = df_f.to_csv(index=False).encode("utf-8")
-
         st.download_button(
-            "⬇️ Descargar reporte (CSV – Excel compatible)",
+            "⬇️ Descargar tabla (CSV - Excel)",
             data=csv,
-            file_name="seguimiento_competencias.csv",
+            file_name="seguimiento.csv",
             mime="text/csv"
         )
 
-# =====================================================
-# CIERRE DE SEMESTRE
-# =====================================================
-elif menu == "Cierre de Semestre":
+# ======================================================
+# 4. CIERRE DE SEMESTRE
+# ======================================================
+elif seccion == "Cierre de Semestre":
     st.header("Cierre de Semestre")
 
     opcion = st.radio(
-        "Acción",
-        ["Borrar TODO", "Borrar grupo", "Borrar estudiante"]
+        "Selecciona una opción",
+        ["Borrar TODO (estudiantes y actividades)", "Borrar solo un estudiante"]
     )
 
-    if opcion == "Borrar TODO" and st.button("Confirmar"):
-        df_est = df_est.iloc[0:0]
-        df_act = df_act.iloc[0:0]
-        guardar_csv(df_est, DATA_EST)
-        guardar_csv(df_act, DATA_ACT)
-        st.success("Sistema reiniciado")
+    if opcion == "Borrar TODO (estudiantes y actividades)":
+        if st.button("⚠️ Confirmar borrado total"):
+            df = df.iloc[0:0]
+            guardar_datos(df)
+            st.success("Todos los datos fueron eliminados")
 
-    elif opcion == "Borrar grupo":
-        grupo = st.selectbox("Grupo", df_est["Grupo"].unique())
-        if st.button("Borrar grupo"):
-            df_est = df_est[df_est["Grupo"] != grupo]
-            df_act = df_act[df_act["Grupo"] != grupo]
-            guardar_csv(df_est, DATA_EST)
-            guardar_csv(df_act, DATA_ACT)
-            st.success("Grupo eliminado")
+    else:
+        if not df.empty:
+            grupos = sorted(df["Grupo"].dropna().unique())
+            grupo_sel = st.selectbox("Grupo", grupos)
 
-    elif opcion == "Borrar estudiante":
-        estudiante = st.selectbox("Estudiante", df_est["Estudiante"].unique())
-        if st.button("Borrar estudiante"):
-            df_est = df_est[df_est["Estudiante"] != estudiante]
-            df_act = df_act[df_act["Estudiante"] != estudiante]
-            guardar_csv(df_est, DATA_EST)
-            guardar_csv(df_act, DATA_ACT)
-            st.success("Estudiante eliminado")
+            estudiantes = sorted(
+                df[df["Grupo"] == grupo_sel]["Estudiante"].dropna().unique()
+            )
+            est_sel = st.selectbox("Estudiante", estudiantes)
+
+            if st.button("⚠️ Borrar estudiante"):
+                df = df[~(
+                    (df["Grupo"] == grupo_sel) &
+                    (df["Estudiante"] == est_sel)
+                )]
+                guardar_datos(df)
+                st.success("Estudiante eliminado")
