@@ -1,10 +1,22 @@
+# =====================================================
+# DASHBOARD DE SEGUIMIENTO DE COMPETENCIAS
+# Compatible con Streamlit Cloud
+# =====================================================
+
 import streamlit as st
 import pandas as pd
 import os
 from io import BytesIO
-from fpdf import FPDF
 
-# ---------------- CONFIGURACIÓN GENERAL ----------------
+# ---- PDF (REPORTLAB PLATYPUS) ----
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib.pagesizes import landscape, A4
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+
+# =====================================================
+# CONFIGURACIÓN GENERAL
+# =====================================================
 DATA_EST = "estudiantes.csv"
 DATA_ACT = "actividades.csv"
 
@@ -14,63 +26,83 @@ NIVELES = ["No aplica", "Incipiente", "Básico", "Sólido", "Destacado"]
 VALORES = {"Incipiente": 0, "Básico": 1, "Sólido": 2, "Destacado": 3}
 ACTIVIDADES = [f"A{i+1}" for i in range(8)]
 
-# ---------------- FUNCIONES BASE ----------------
-def cargar_csv(path, cols):
+# =====================================================
+# FUNCIONES DE PERSISTENCIA
+# =====================================================
+def cargar_csv(path, columnas):
     if os.path.exists(path):
         return pd.read_csv(path)
-    return pd.DataFrame(columns=cols)
+    return pd.DataFrame(columns=columnas)
 
 def guardar_csv(df, path):
     df.to_csv(path, index=False)
 
+# =====================================================
+# CÁLCULO DE PORCENTAJE (IGNORA "NO APLICA")
+# =====================================================
 def calcular_porcentaje(df_est, competencia):
-    total, maximo = 0, 0
+    puntos = 0
+    maximo = 0
     for _, row in df_est.iterrows():
         for e in range(1, ELEMENTOS + 1):
             val = row[f"{competencia}_E{e}"]
             if val != "No aplica":
-                total += VALORES[val]
+                puntos += VALORES[val]
                 maximo += 3
-    return round((total / maximo) * 100, 2) if maximo > 0 else 0
+    return round((puntos / maximo) * 100, 2) if maximo > 0 else 0
 
-# ---------------- PDF MULTIPÁGINA ----------------
+# =====================================================
+# GENERACIÓN DE PDF MULTIPÁGINA (TABLA COMPLETA)
+# =====================================================
 def generar_pdf_tabla(df, titulo):
-    pdf = FPDF(orientation="L", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=10)
-    pdf.add_page()
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 10, titulo, ln=True, align="C")
-    pdf.ln(4)
-    pdf.set_font("Helvetica", size=7)
-
-    col_width = 277 / len(df.columns)
-
-    for col in df.columns:
-        pdf.multi_cell(col_width, 6, col, border=1, align="C", ln=3)
-    pdf.ln()
-
-    for _, row in df.iterrows():
-        for item in row:
-            pdf.multi_cell(col_width, 6, str(item), border=1, align="C", ln=3)
-        pdf.ln()
-
     buffer = BytesIO()
-    pdf.output(buffer)
+
+    pdf = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=20,
+        leftMargin=20,
+        topMargin=20,
+        bottomMargin=20
+    )
+
+    estilos = getSampleStyleSheet()
+    elementos = [Paragraph(titulo, estilos["Title"])]
+
+    data = [df.columns.tolist()] + df.astype(str).values.tolist()
+
+    tabla = Table(data, repeatRows=1)
+    tabla.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+        ("FONT", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+
+    elementos.append(tabla)
+    pdf.build(elementos)
     buffer.seek(0)
     return buffer
 
-# ---------------- CARGA DE DATOS ----------------
+# =====================================================
+# CARGA DE DATOS
+# =====================================================
 df_est = cargar_csv(DATA_EST, ["Estudiante", "Grupo"])
-df_act_cols = ["Estudiante", "Grupo", "Actividad"] + [
+
+columnas_act = ["Estudiante", "Grupo", "Actividad"] + [
     f"{c}_E{e}" for c in COMPETENCIAS for e in range(1, ELEMENTOS + 1)
 ]
-df_act = cargar_csv(DATA_ACT, df_act_cols)
+df_act = cargar_csv(DATA_ACT, columnas_act)
 
-# ---------------- INTERFAZ ----------------
+# =====================================================
+# INTERFAZ GENERAL
+# =====================================================
 st.title("📊 Dashboard de Seguimiento de Competencias")
 
 seccion = st.sidebar.radio(
-    "Secciones",
+    "Menú",
     ["Registrar Estudiante", "Captura Actividad", "Seguimiento de Logro", "Cierre de Semestre"]
 )
 
@@ -83,7 +115,7 @@ if seccion == "Registrar Estudiante":
     grupo = st.text_input("Grupo")
     estudiante = st.text_input("Nombre del estudiante")
 
-    if st.button("Registrar"):
+    if st.button("Registrar estudiante"):
         if grupo and estudiante:
             nuevo = pd.DataFrame([[estudiante, grupo]], columns=df_est.columns)
             df_est = pd.concat([df_est, nuevo], ignore_index=True)
@@ -91,11 +123,12 @@ if seccion == "Registrar Estudiante":
             st.success("Estudiante registrado correctamente")
 
     st.subheader("Listado por grupo")
-    grupo_sel = st.selectbox("Selecciona grupo", sorted(df_est["Grupo"].unique()))
-    st.dataframe(df_est[df_est["Grupo"] == grupo_sel])
+    if not df_est.empty:
+        grupo_sel = st.selectbox("Selecciona grupo", sorted(df_est["Grupo"].unique()))
+        st.dataframe(df_est[df_est["Grupo"] == grupo_sel])
 
 # =====================================================
-# 2️⃣ CAPTURA ACTIVIDAD
+# 2️⃣ CAPTURA DE ACTIVIDAD
 # =====================================================
 elif seccion == "Captura Actividad":
     st.header("Captura de Actividad")
@@ -117,7 +150,7 @@ elif seccion == "Captura Actividad":
     if st.button("Guardar actividad"):
         df_act = pd.concat([df_act, pd.DataFrame([registro])], ignore_index=True)
         guardar_csv(df_act, DATA_ACT)
-        st.success("Actividad guardada")
+        st.success("Actividad registrada correctamente")
 
 # =====================================================
 # 3️⃣ SEGUIMIENTO DE LOGRO
@@ -137,6 +170,7 @@ elif seccion == "Seguimiento de Logro":
     st.dataframe(df_filtrado)
 
     st.subheader("Exportaciones")
+
     excel_buffer = BytesIO()
     df_filtrado.to_excel(excel_buffer, index=False)
     excel_buffer.seek(0)
@@ -172,7 +206,7 @@ elif seccion == "Cierre de Semestre":
         df_act = df_act.iloc[0:0]
         guardar_csv(df_est, DATA_EST)
         guardar_csv(df_act, DATA_ACT)
-        st.success("Todo eliminado. Listo para nuevo semestre.")
+        st.success("Sistema reiniciado para nuevo semestre")
 
     elif opcion == "Borrar un grupo":
         grupo = st.selectbox("Grupo", df_est["Grupo"].unique())
